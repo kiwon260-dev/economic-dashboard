@@ -43,7 +43,7 @@ def get_economic_data():
     bok_gdp = safe_get("금리/GDP", f"https://ecos.bok.or.kr/api/StatisticSearch/{BOK_KEY}/json/kr/1/10/722Y001/M/202301/202512/0101000")
     bok_debt = safe_get("부채", f"https://ecos.bok.or.kr/api/StatisticSearch/{BOK_KEY}/json/kr/1/10/151Y005/Q/2023Q1/2025Q4")
     
-    # 추가 데이터 (환율 등)
+    # 추가 데이터 (환율 등 )
     exchange_rate = safe_get("환율", f"https://ecos.bok.or.kr/api/StatisticSearch/{BOK_KEY}/json/kr/1/10/731Y001/D/20240101/20251231/0000001")
 
     # 2. 통계청 데이터 (리스트 형식으로 반환되므로 실패 시 [] 반환하도록 설정)
