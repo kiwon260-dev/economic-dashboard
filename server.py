@@ -1,70 +1,110 @@
+import os
+import logging
 from flask import Flask, jsonify, send_from_directory
-from flask_cors import CORS
-import requests, urllib3, os
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-dist_path = os.path.join(BASE_DIR, 'dist')
-IS_PROD = os.path.isdir(dist_path)
+DIST_DIR = os.path.join(BASE_DIR, 'dist')
 
-app = Flask(
-    __name__,
-    static_folder=dist_path if IS_PROD else None,
-    static_url_path='' if IS_PROD else None,
-)
-CORS(app)
+app = Flask(__name__, static_folder=DIST_DIR, static_url_path='')
 
-BOK_KEY   = "9PDUTTQC3QYSL870G1AX"
-KOSIS_KEY = "NzllNGQwYjExYTI4ZWQ0NzhiZWNiNDAyYTAyNzNhODk="
+@app.after_request
+def add_cors(response):
+    response.headers['Access-Control-Allow-Origin']  = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,OPTIONS'
+    return response
 
-def safe_get(name, url, is_list=False):
-    print(f"📡 [요청 시도] {name} 데이터...")
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+URL = os.getenv("SUPABASE_URL")
+KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(URL, KEY)
+
+
+@app.route('/api/health')
+def health():
+    return jsonify({
+        "status":      "ok",
+        "dist_exists": os.path.exists(DIST_DIR),
+        "dist_files":  os.listdir(DIST_DIR) if os.path.exists(DIST_DIR) else [],
+    })
+
+
+@app.route('/api/indicators/chart', methods=['GET'])
+def get_chart_data():
+    logger.info("--- 차트 데이터 요청 ---")
     try:
-        r = requests.get(url, timeout=10, verify=False, headers=headers)
-        if r.status_code == 200:
-            print(f"✅ [성공] {name}")
-            return r.json()
+        res = (
+            supabase.table("macro_indicators")
+            .select("*")
+            .order("created_at", desc=False)
+            .range(0, 29999)
+            .execute()
+        )
+
+        # ── indicator → data_map 키 매핑 ─────────────────────────────────
+        # collector.py와 반드시 일치해야 함
+        INDICATOR_MAP = {
+            "Base Rate":         "bok_rate",
+            "Exchange Rate":     "exch",
+            "Household Debt":    "debt",
+            "Unemployment Rate": "unemp",
+            # CPI 3종: 각각 별도 키
+            "CPI_Total":         "cpi_total",       # 총지수
+            "CPI_Food":          "cpi_food",         # 식료품 및 비주류음료
+            "CPI_Restaurant":    "cpi_restaurant",   # 음식 및 숙박
+            # 하위 호환: 기존 DB에 CPI_Hotel로 저장된 데이터 대응
+            "CPI_Hotel":         "cpi_restaurant",
+            "CPI":               "cpi_total",        # 구버전 단일 CPI
+        }
+
+        data_map = {k: [] for k in set(INDICATOR_MAP.values())}
+
+        for r in res.data:
+            key = INDICATOR_MAP.get(r['indicator'])
+            if key is None:
+                continue
+
+            raw_date = r.get('created_at', '')
+            date_str = raw_date[:10] if raw_date else None
+            if not date_str:
+                continue
+
+            data_map[key].append({"date": date_str, "value": r['value']})
+
+        logger.info(
+            f"전송 준비 — "
+            f"금리:{len(data_map['bok_rate'])} "
+            f"환율:{len(data_map['exch'])} "
+            f"부채:{len(data_map['debt'])} "
+            f"실업:{len(data_map['unemp'])} "
+            f"CPI총:{len(data_map['cpi_total'])} "
+            f"CPI식:{len(data_map['cpi_food'])} "
+            f"CPI음:{len(data_map['cpi_restaurant'])}"
+        )
+        return jsonify({"success": True, "data": data_map})
+
     except Exception as e:
-        print(f"🔥 [에러] {name}: {str(e)}")
-    return [] if is_list else {"StatisticSearch": {"row": []}}
+        logger.error(f"데이터 로드 에러: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
-@app.route('/api/economic-data')
-def get_economic_data():
-    print("\n🚀 [API 호출 수신] 데이터 전송 준비")
-    
-    # 한국은행 데이터 호출
-    base_rate = safe_get("금리", f"https://ecos.bok.or.kr/api/StatisticSearch/{BOK_KEY}/json/kr/1/10/722Y001/M/202301/202512/0101000")
-    debt_data = safe_get("부채", f"https://ecos.bok.or.kr/api/StatisticSearch/{BOK_KEY}/json/kr/1/10/151Y005/Q/2023Q1/2025Q4")
-    exchange = safe_get("환율", f"https://ecos.bok.or.kr/api/StatisticSearch/{BOK_KEY}/json/kr/1/10/731Y001/D/20240101/20251231/0000001")
-
-    # 통계청 데이터 (차단되더라도 빈 배열 전송)
-    unemp = safe_get("실업", f"https://kosis.kr/openapi/Param/statisticsParameterData.do?method=getList&apiKey={KOSIS_KEY}&itmId=T80+&objL1=ALL&objL2=00+&format=json&jsonVD=Y&prdSe=M&newEstPrdCnt=10&orgId=101&tblId=DT_1DA7102S", True)
-    cpi = safe_get("물가", f"https://kosis.kr/openapi/Param/statisticsParameterData.do?method=getList&apiKey={KOSIS_KEY}&itmId=T&objL1=T10+&objL2=0+A+K&format=json&jsonVD=Y&prdSe=M&newEstPrdCnt=10&orgId=101&tblId=DT_1J22001", True)
-
-    # 💡 [핵심] 리액트가 찾을 수 있는 모든 이름으로 다 넣어줍니다.
-    response_data = {
-        "bok_gdp": base_rate,       # 리액트가 bok_gdp를 찾으면 금리가 나옵니다.
-        "bok_debt": debt_data,      # 부채
-        "exchange_rate": exchange,  # 환율
-        "base_rate": base_rate,     # 혹시 base_rate를 찾을까봐 한 번 더
-        "unemp": unemp,
-        "cpi": cpi
-    }
-    
-    print("🏁 [반환] 데이터 조립 완료 (금리/부채/환율 포함)\n")
-    return jsonify(response_data)
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
-    if IS_PROD:
-        if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
-            return send_from_directory(app.static_folder, path)
-        return send_from_directory(app.static_folder, 'index.html')
-    return "Backend Running"
+    full = os.path.join(DIST_DIR, path)
+    if path and os.path.exists(full):
+        return send_from_directory(DIST_DIR, path)
+    return send_from_directory(DIST_DIR, 'index.html')
+
+
+application = app  # PythonAnywhere WSGI
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    logger.info(f"서버 시작 — dist: {DIST_DIR} (존재: {os.path.exists(DIST_DIR)})")
+    app.run(host='0.0.0.0', port=5000, debug=True)
