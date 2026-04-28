@@ -39,33 +39,45 @@ def health():
 def get_chart_data():
     logger.info("--- 차트 데이터 요청 ---")
     try:
-        res = (
-            supabase.table("macro_indicators")
-            .select("*")
-            .order("created_at", desc=False)
-            .range(0, 29999)
-            .execute()
-        )
+        # ── 페이지네이션으로 전체 데이터 수집 ────────────────────────────────
+        # Supabase PostgREST 기본 제한: 1000행/요청
+        # → 1000행씩 반복 요청해서 전체 합산
+        PAGE_SIZE = 1000
+        all_rows  = []
+        offset    = 0
+        while True:
+            batch = (
+                supabase.table("macro_indicators")
+                .select("*")
+                .order("created_at", desc=False)
+                .range(offset, offset + PAGE_SIZE - 1)
+                .execute()
+            )
+            rows = batch.data or []
+            all_rows.extend(rows)
+            logger.info(f"페이지 로드: offset={offset} rows={len(rows)} 누적={len(all_rows)}")
+            if len(rows) < PAGE_SIZE:
+                break  # 마지막 페이지
+            offset += PAGE_SIZE
+
+        logger.info(f"전체 DB 행 수: {len(all_rows)}")
 
         # ── indicator → data_map 키 매핑 ─────────────────────────────────
-        # collector.py와 반드시 일치해야 함
         INDICATOR_MAP = {
             "Base Rate":         "bok_rate",
             "Exchange Rate":     "exch",
             "Household Debt":    "debt",
             "Unemployment Rate": "unemp",
-            # CPI 3종: 각각 별도 키
-            "CPI_Total":         "cpi_total",       # 총지수
-            "CPI_Food":          "cpi_food",         # 식료품 및 비주류음료
-            "CPI_Restaurant":    "cpi_restaurant",   # 음식 및 숙박
-            # 하위 호환: 기존 DB에 CPI_Hotel로 저장된 데이터 대응
-            "CPI_Hotel":         "cpi_restaurant",
+            "CPI_Total":         "cpi_total",
+            "CPI_Food":          "cpi_food",
+            "CPI_Restaurant":    "cpi_restaurant",
+            "CPI_Hotel":         "cpi_restaurant",   # 구버전 하위 호환
             "CPI":               "cpi_total",        # 구버전 단일 CPI
         }
 
         data_map = {k: [] for k in set(INDICATOR_MAP.values())}
 
-        for r in res.data:
+        for r in all_rows:
             key = INDICATOR_MAP.get(r['indicator'])
             if key is None:
                 continue
