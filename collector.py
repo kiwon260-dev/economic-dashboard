@@ -161,19 +161,23 @@ def fetch_intl_rates():
         res = requests.get(url, timeout=15).json()
         rows = res.get("observations", [])
 
-        logger.info(f"[FRED] 미국금리: {len(rows)}건")
+        logger.info(f"[FRED] 미국 정책금리(raw): {len(rows)}건")
 
         for r in rows:
             if r["value"] == ".":
                 continue
 
             try:
-                val = float(r["value"])
+                raw = float(r["value"])
+
+                # 🔥 핵심: 정책금리 형태로 변환
+                val = round(raw * 4) / 4
+
                 date = f"{r['date']}T00:00:00Z"
 
                 results.append({
                     "source": "FRED",
-                    "indicator": "IntRate_US",
+                    "indicator": "US_RATE_POLICY",  # 🔥 이름 변경 (중요)
                     "value": val,
                     "created_at": date
                 })
@@ -183,7 +187,7 @@ def fetch_intl_rates():
     except Exception as e:
         logger.error(f"[FRED] 실패: {e}")
 
-    logger.info(f"[FRED] 총 데이터: {len(results)}건")
+    logger.info(f"[FRED] 정책금리 변환 완료: {len(results)}건")
     return results
 
 

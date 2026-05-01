@@ -71,8 +71,7 @@ def get_chart_data():
             "CPI_Total":         "cpi_total",
             "CPI_Food":          "cpi_food",
             "CPI_Restaurant":    "cpi_restaurant",
-            "CPI_Hotel":         "cpi_restaurant",   # 구버전 하위 호환
-            "CPI":               "cpi_total",        # 구버전 단일 CPI
+    	    "US_RATE_POLICY":    "us_rate",
         }
 
         data_map = {k: [] for k in set(INDICATOR_MAP.values())}
@@ -98,6 +97,7 @@ def get_chart_data():
             f"CPI총:{len(data_map['cpi_total'])} "
             f"CPI식:{len(data_map['cpi_food'])} "
             f"CPI음:{len(data_map['cpi_restaurant'])}"
+            f"미국금리:{len(data_map['us_rate'])} "
         )
         return jsonify({"success": True, "data": data_map})
 
